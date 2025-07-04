@@ -2,8 +2,8 @@ import * as core from '@actions/core'
 import * as github from '@actions/github'
 import { Octokit } from '@octokit/action'
 import * as stepTracer from './stepTracer'
-import * as statCollector from './statCollector'
-import * as processTracer from './processTracer'
+import * as buildevents from './buildevents'
+import * as util from './util'
 import * as logger from './logger'
 import { WorkflowJobType } from './interfaces'
 
@@ -11,6 +11,41 @@ const { pull_request } = github.context.payload
 const { workflow, job, repo, runId, sha } = github.context
 const PAGE_SIZE = 100
 const octokit: Octokit = new Octokit()
+
+function generateTraceContent(
+  currentJob: WorkflowJobType,
+  traceUrl: string
+): string {
+  const stepCount = currentJob.steps?.length || 0
+  const duration =
+    currentJob.completed_at && currentJob.started_at
+      ? Math.round(
+          (new Date(currentJob.completed_at).getTime() -
+            new Date(currentJob.started_at).getTime()) /
+            1000
+        )
+      : 0
+
+  const content = [
+    '',
+    '### 🔍 Workflow Trace',
+    '',
+    `View the complete execution trace for this workflow in Honeycomb:`,
+    '',
+    `**[📊 Open Trace in Honeycomb](${traceUrl})**`,
+    '',
+    `**Job Summary:**`,
+    `- **Steps**: ${stepCount}`,
+    `- **Duration**: ${duration}s`,
+    `- **Status**: ${currentJob.conclusion || 'completed'}`,
+    '',
+    `This trace includes detailed timing and context for all ${stepCount} workflow steps.`
+  ]
+
+  return content.join('\n')
+}
+
+
 
 async function getCurrentJob(): Promise<WorkflowJobType | null> {
   const _getCurrentJob = async (): Promise<WorkflowJobType | null> => {
@@ -51,7 +86,7 @@ async function getCurrentJob(): Promise<WorkflowJobType | null> {
       }
       await new Promise(r => setTimeout(r, 1000))
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error(
       `Unable to get current workflow job info. ` +
         `Please sure that your workflow have "actions:read" permission!`
@@ -71,7 +106,7 @@ async function reportAll(
   const jobUrl = `https://github.com/${repo.owner}/${repo.repo}/runs/${currentJob.id}?check_suite_focus=true`
   logger.debug(`Job url: ${jobUrl}`)
 
-  const title = `## Workflow Telemetry - ${workflow} / ${currentJob.name}`
+  const title = `## Workflow Step Trace - ${workflow} / ${currentJob.name}`
   logger.debug(`Title: ${title}`)
 
   const commit: string =
@@ -82,7 +117,7 @@ async function reportAll(
   logger.debug(`Commit url: ${commitUrl}`)
 
   const info =
-    `Workflow telemetry for commit [${commit}](${commitUrl})\n` +
+    `Workflow step trace for commit [${commit}](${commitUrl})\n` +
     `You can access workflow job details [here](${jobUrl})`
 
   const postContent: string = [title, info, content].join('\n')
@@ -111,6 +146,44 @@ async function reportAll(
   logger.info(`Reporting all content completed`)
 }
 
+async function runPost(currentJob: WorkflowJobType): Promise<string | null> {
+  try {
+    const postStart = util.getTimestamp()
+
+    const traceId = util.buildTraceId()
+    // use trace-start if it's provided otherwise use the start time for current job
+    const traceStart = core.getState('buildStart')
+    const workflowStatus =
+      process.env.GITHUB_ACTION_WORKFLOW_STATUS || 'success'
+    const result =
+      workflowStatus.toUpperCase() === 'SUCCESS' ? 'success' : 'failure'
+
+    buildevents.addFields({
+      'job.status': workflowStatus,
+      'workflow.status': workflowStatus
+    })
+
+    // Send individual step traces to Honeycomb
+    await stepTracer.finish(currentJob)
+
+    await buildevents.step(
+      traceId,
+      util.randomInt(2 ** 32).toString(),
+      postStart.toString(),
+      'workflow-step-telemetry_post'
+    )
+
+    // Capture the trace URL from buildevents build command
+    const traceUrl = await buildevents.build(traceId, traceStart, result)
+    return traceUrl
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      core.setFailed(error.message)
+    }
+    return null
+  }
+}
+
 async function run(): Promise<void> {
   try {
     logger.info(`Finishing ...`)
@@ -126,39 +199,29 @@ async function run(): Promise<void> {
 
     logger.debug(`Current job: ${JSON.stringify(currentJob)}`)
 
-    // Finish step tracer
-    await stepTracer.finish(currentJob)
-    // Finish stat collector
-    await statCollector.finish(currentJob)
-    // Finish process tracer
-    await processTracer.finish(currentJob)
+    // Check if this is the post hook and if we should end the trace
+    const isPost = !!core.getState('isPost')
+    const endTrace = !!core.getState('endTrace')
 
-    // Report step tracer
-    const stepTracerContent: string | null = await stepTracer.report(currentJob)
-    // Report stat collector
-    const stepCollectorContent: string | null =
-      await statCollector.report(currentJob)
-    // Report process tracer
-    const procTracerContent: string | null =
-      await processTracer.report(currentJob)
-
-    let allContent = ''
-
-    if (stepTracerContent) {
-      allContent = allContent.concat(stepTracerContent, '\n')
-    }
-    if (stepCollectorContent) {
-      allContent = allContent.concat(stepCollectorContent, '\n')
-    }
-    if (procTracerContent) {
-      allContent = allContent.concat(procTracerContent, '\n')
+    let traceUrl: string | null = null
+    if (isPost && endTrace) {
+      traceUrl = await runPost(currentJob)
     }
 
-    await reportAll(currentJob, allContent)
+    // Post Honeycomb trace URL as PR comment if enabled
+    const commentOnPR = core.getInput('comment_on_pr') === 'true'
+    const jobSummary = core.getInput('job_summary') === 'true'
+
+    if ((commentOnPR || jobSummary) && traceUrl) {
+      const traceContent = generateTraceContent(currentJob, traceUrl)
+      await reportAll(currentJob, traceContent)
+    }
 
     logger.info(`Finish completed`)
-  } catch (error: any) {
-    logger.error(error.message)
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      logger.error(error.message)
+    }
   }
 }
 
