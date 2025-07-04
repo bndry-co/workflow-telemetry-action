@@ -1,46 +1,35 @@
-name: "Workflow Telemetry"
-description: "Workflow Telemetry"
+name: "Workflow Step Telemetry"
+description: "A GitHub Action to automatically instrument workflow step execution and send traces to Honeycomb"
 author: "Serkan Özal <serkan@thundra.io>"
 inputs:
   github_token:
     description: "GitHub API Access Token"
     default: ${{ github.token }}
     required: false
-  metric_frequency:
-    description: "Metric collection frequency in seconds. Must be a number. Defaults to '5'."
-    default: "5"
+  apikey:
+    description: "Honeycomb API key - required to send traces to Honeycomb"
+    required: true
+  apihost:
+    description: "Honeycomb API host"
     required: false
-  proc_trace_min_duration:
-    description: "Puts minimum limit for process execution duration to be traced. Must be a number. Defaults to '-1' which means process duration filtering is not applied."
-    default: "-1"
+    default: "https://api.honeycomb.io"
+  dataset:
+    description: "The Honeycomb dataset to send traces to"
+    required: true
+  matrix-key:
+    description: "Set this to a key unique for this matrix cell, only useful when using a build matrix"
     required: false
-  proc_trace_sys_enable:
-    description: "Enables tracing default system processes ('aws', 'cat', 'sed', ...). Defaults to 'false'."
+  otel-traceid:
+    description: "If true, generate the trace ID as a 128-bit hex string compatible with OpenTelemetry by MD5 hashing the existing predictable trace ID"
+    required: false
     default: "false"
-    required: false
-  proc_trace_chart_show:
-    description: "Enables showing traced processes in trace chart. Defaults to 'true'."
-    default: "true"
-    required: false
-  proc_trace_chart_max_count:
-    description: "Maximum number of processes to be shown in trace chart (applicable if `proc_trace_chart_show` input is `true`). Must be a number. Defaults to '100'."
-    default: "100"
-    required: false
-  proc_trace_table_show:
-    description: "Enables showing traced processes in trace table. Defaults to 'false'."
-    default: "false"
-    required: false
   comment_on_pr:
-    description: "Set to `true` to publish the results as comment to the PR (applicable if workflow run is triggered from PR). Defaults to 'true'."
-    default: "true"
+    description: "Set to `true` to post a comment with the Honeycomb trace URL to the PR (applicable if workflow run is triggered from PR). Defaults to 'false'."
+    default: "false"
     required: false
   job_summary:
-    description: "Set to `true` to publish the results as part of the job summary page of the workflow run. Defaults to 'true'."
-    default: "true"
-    required: false
-  theme:
-    description: "Set to `dark` to generate charts compatible with Github dark mode. Defaults to 'light'."
-    default: "light"
+    description: "Set to `true` to add the Honeycomb trace URL to the job summary page of the workflow run. Defaults to 'false'."
+    default: "false"
     required: false
 
 runs:
