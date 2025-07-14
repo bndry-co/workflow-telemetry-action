@@ -25,13 +25,31 @@ async function hidePreviousComments(excludeCommentId?: number): Promise<void> {
       per_page: 100
     })
 
-    // Find comments made by this action (identify by content markers), excluding the new comment
+    // Get current commit SHA
+    const currentCommit = (pull_request && pull_request.head && pull_request.head.sha) || sha
+
+    // Find comments made by this action for older commits, excluding the new comment
     const actionComments = comments.data.filter(comment => {
       const body = comment.body || ''
-      return comment.id !== excludeCommentId &&
-             body.includes('### 🔍 Workflow Trace') && 
-             body.includes('📊 Open Trace in Honeycomb') &&
-             body.includes('## Workflow Step Trace -')
+      
+      // Check if it's a comment from this action
+      const isActionComment = body.includes('### 🔍 Workflow Trace') && 
+                             body.includes('📊 Open Trace in Honeycomb') &&
+                             body.includes('## Workflow Step Trace -')
+      
+      if (!isActionComment || comment.id === excludeCommentId) {
+        return false
+      }
+      
+      // Extract commit SHA from comment body
+      const commitMatch = body.match(/commit\/([a-f0-9]{40})/i)
+      if (commitMatch) {
+        const commentCommit = commitMatch[1]
+        // Only hide if it's for a different (older) commit
+        return commentCommit !== currentCommit
+      }
+      
+      return false
     })
 
     // Hide each previous comment using GraphQL API
@@ -52,7 +70,7 @@ async function hidePreviousComments(excludeCommentId?: number): Promise<void> {
           commentId: comment.node_id
         })
         
-        logger.debug(`Hidden previous comment: ${comment.id}`)
+        logger.debug(`Hidden comment from older commit: ${comment.id}`)
       } catch (error) {
         logger.debug(`Failed to hide comment ${comment.id}: ${error}`)
       }
