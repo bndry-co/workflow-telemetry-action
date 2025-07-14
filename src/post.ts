@@ -12,7 +12,7 @@ const { workflow, job, repo, runId, sha } = github.context
 const PAGE_SIZE = 100
 const octokit: Octokit = new Octokit()
 
-async function hidePreviousComments(excludeCommentId?: number): Promise<void> {
+async function hidePreviousComments(): Promise<void> {
   if (!pull_request?.number) {
     return
   }
@@ -29,22 +29,20 @@ async function hidePreviousComments(excludeCommentId?: number): Promise<void> {
     const currentCommit = (pull_request && pull_request.head && pull_request.head.sha) || sha
 
     // Find comments made by this action for older commits, excluding the new comment
-    const actionComments = comments.data.filter(comment => {
+    const commentsToHide = comments.data.filter(comment => {
       const body = comment.body || ''
       
       // Check if it's a comment from this action
-      const isActionComment = body.includes('### 🔍 Workflow Trace') && 
-                             body.includes('📊 Open Trace in Honeycomb') &&
-                             body.includes('## Workflow Step Trace -')
+      const isCommentFromThisAction = body.includes('## Workflow Step Trace -')
       
-      if (!isActionComment || comment.id === excludeCommentId) {
+      if (!isCommentFromThisAction) {
         return false
       }
       
       // Extract commit SHA from comment body
-      const commitMatch = body.match(/commit\/([a-f0-9]{40})/i)
-      if (commitMatch) {
-        const commentCommit = commitMatch[1]
+      const commitRegexMatch = body.match(/commit\/([a-f0-9]{40})/i)
+      if (commitRegexMatch) {
+        const commentCommit = commitRegexMatch[1]
         // Only hide if it's for a different (older) commit
         return commentCommit !== currentCommit
       }
@@ -53,7 +51,7 @@ async function hidePreviousComments(excludeCommentId?: number): Promise<void> {
     })
 
     // Hide each previous comment using GraphQL API
-    for (const comment of actionComments) {
+    for (const comment of commentsToHide) {
       try {
         await octokit.graphql(`
           mutation($commentId: ID!) {
@@ -209,7 +207,7 @@ async function reportAll(
     })
 
     // Hide previous comments from this action after creating the new one
-    await hidePreviousComments(newComment.data.id)
+    await hidePreviousComments()
   } else {
     logger.debug(`Couldn't find Pull Request`)
   }

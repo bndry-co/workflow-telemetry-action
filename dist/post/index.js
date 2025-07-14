@@ -40553,15 +40553,27 @@ function hidePreviousComments() {
         try {
             // Get all comments on the PR
             const comments = yield octokit.rest.issues.listComments(Object.assign(Object.assign({}, github.context.repo), { issue_number: pull_request.number, per_page: 100 }));
-            // Find comments made by this action (identify by content markers)
-            const actionComments = comments.data.filter(comment => {
+            // Get current commit SHA
+            const currentCommit = (pull_request && pull_request.head && pull_request.head.sha) || sha;
+            // Find comments made by this action for older commits, excluding the new comment
+            const commentsToHide = comments.data.filter(comment => {
                 const body = comment.body || '';
-                return body.includes('### 🔍 Workflow Trace') &&
-                    body.includes('📊 Open Trace in Honeycomb') &&
-                    body.includes('## Workflow Step Trace -');
+                // Check if it's a comment from this action
+                const isCommentFromThisAction = body.includes('## Workflow Step Trace -');
+                if (!isCommentFromThisAction) {
+                    return false;
+                }
+                // Extract commit SHA from comment body
+                const commitRegexMatch = body.match(/commit\/([a-f0-9]{40})/i);
+                if (commitRegexMatch) {
+                    const commentCommit = commitRegexMatch[1];
+                    // Only hide if it's for a different (older) commit
+                    return commentCommit !== currentCommit;
+                }
+                return false;
             });
             // Hide each previous comment using GraphQL API
-            for (const comment of actionComments) {
+            for (const comment of commentsToHide) {
                 try {
                     yield octokit.graphql(`
           mutation($commentId: ID!) {
@@ -40577,7 +40589,7 @@ function hidePreviousComments() {
         `, {
                         commentId: comment.node_id
                     });
-                    logger.debug(`Hidden previous comment: ${comment.id}`);
+                    logger.debug(`Hidden comment from older commit: ${comment.id}`);
                 }
                 catch (error) {
                     logger.debug(`Failed to hide comment ${comment.id}: ${error}`);
@@ -40685,9 +40697,9 @@ function reportAll(currentJob, content) {
             if (logger.isDebugEnabled()) {
                 logger.debug(`Found Pull Request: ${JSON.stringify(pull_request)}`);
             }
-            // Hide previous comments from this action before creating a new one
+            const newComment = yield octokit.rest.issues.createComment(Object.assign(Object.assign({}, github.context.repo), { issue_number: Number((_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.number), body: postContent }));
+            // Hide previous comments from this action after creating the new one
             yield hidePreviousComments();
-            yield octokit.rest.issues.createComment(Object.assign(Object.assign({}, github.context.repo), { issue_number: Number((_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.number), body: postContent }));
         }
         else {
             logger.debug(`Couldn't find Pull Request`);
