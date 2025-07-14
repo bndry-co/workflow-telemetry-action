@@ -29428,37 +29428,18 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const stepTracer = __importStar(__nccwpck_require__(712));
 const buildevents = __importStar(__nccwpck_require__(1814));
 const util = __importStar(__nccwpck_require__(4527));
 const logger = __importStar(__nccwpck_require__(6999));
-const md5_1 = __importDefault(__nccwpck_require__(2296));
-function buildTraceId() {
-    const traceComponents = [
-        util.getEnv('GITHUB_REPOSITORY'),
-        util.getEnv('GITHUB_WORKFLOW'),
-        util.getEnv('GITHUB_RUN_NUMBER'),
-        util.getEnv('GITHUB_RUN_ATTEMPT')
-    ];
-    const rawTraceId = util.replaceSpaces(traceComponents.filter(value => value).join('-'));
-    const otelTraceIdFlag = core.getInput('otel-traceid').toLowerCase() === 'true';
-    if (otelTraceIdFlag) {
-        // md5 returns a 32-char hex string (128 bits)
-        return (0, md5_1.default)(rawTraceId);
-    }
-    return rawTraceId;
-}
 function run() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             logger.info(`Initializing ...`);
             const buildStart = util.getTimestamp();
-            const traceId = buildTraceId();
+            const traceId = util.buildTraceId();
             core.info(`Trace ID: ${traceId}`);
             // set TRACE_ID to be used throughout the job
             util.setEnv('TRACE_ID', traceId);
@@ -29571,22 +29552,6 @@ const buildevents = __importStar(__nccwpck_require__(1814));
 const util = __importStar(__nccwpck_require__(4527));
 const logger = __importStar(__nccwpck_require__(6999));
 const md5_1 = __importDefault(__nccwpck_require__(2296));
-function buildTraceId() {
-    var _a;
-    const traceComponents = [
-        util.getEnv('GITHUB_REPOSITORY'),
-        util.getEnv('GITHUB_WORKFLOW'),
-        util.getEnv('GITHUB_RUN_NUMBER'),
-        util.getEnv('GITHUB_RUN_ATTEMPT')
-    ];
-    const rawTraceId = util.replaceSpaces(traceComponents.filter(value => value).join('-'));
-    const otelTraceIdFlag = ((_a = process.env.GITHUB_ACTION_INPUT_OTEL_TRACEID) === null || _a === void 0 ? void 0 : _a.toLowerCase()) === 'true';
-    if (otelTraceIdFlag) {
-        // md5 returns a 32-char hex string (128 bits)
-        return (0, md5_1.default)(rawTraceId);
-    }
-    return rawTraceId;
-}
 ///////////////////////////
 function start() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -29607,7 +29572,7 @@ function finish(currentJob) {
         var _a;
         logger.info(`Finishing step tracer ...`);
         try {
-            const traceId = buildTraceId();
+            const traceId = util.buildTraceId();
             // Send step traces to Honeycomb using buildevents
             for (const step of currentJob.steps || []) {
                 if (!step.started_at || !step.completed_at) {
@@ -29676,15 +29641,20 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getTimestamp = getTimestamp;
 exports.randomInt = randomInt;
 exports.getEnv = getEnv;
 exports.setEnv = setEnv;
 exports.replaceSpaces = replaceSpaces;
+exports.buildTraceId = buildTraceId;
 exports.constructExecutableName = constructExecutableName;
 const core = __importStar(__nccwpck_require__(7484));
 const os = __importStar(__nccwpck_require__(857));
+const md5_1 = __importDefault(__nccwpck_require__(2296));
 function getTimestamp() {
     return Math.floor(Date.now() / 1000);
 }
@@ -29699,6 +29669,21 @@ function setEnv(key, value) {
 }
 function replaceSpaces(input) {
     return input.replace(/\s+/g, '_');
+}
+function buildTraceId() {
+    const traceComponents = [
+        getEnv('GITHUB_REPOSITORY'),
+        getEnv('GITHUB_WORKFLOW'),
+        getEnv('GITHUB_RUN_NUMBER'),
+        getEnv('GITHUB_RUN_ATTEMPT')
+    ];
+    const rawTraceId = replaceSpaces(traceComponents.filter(value => value).join('-'));
+    const otelTraceIdFlag = core.getInput('otel-traceid').toLowerCase() === 'true';
+    if (otelTraceIdFlag) {
+        // md5 returns a 32-char hex string (128 bits)
+        return (0, md5_1.default)(rawTraceId);
+    }
+    return rawTraceId;
 }
 function constructExecutableName() {
     const platform = os.platform();

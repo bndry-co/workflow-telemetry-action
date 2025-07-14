@@ -40533,9 +40533,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
@@ -40544,11 +40541,54 @@ const stepTracer = __importStar(__nccwpck_require__(712));
 const buildevents = __importStar(__nccwpck_require__(1814));
 const util = __importStar(__nccwpck_require__(4527));
 const logger = __importStar(__nccwpck_require__(6999));
-const md5_1 = __importDefault(__nccwpck_require__(2296));
 const { pull_request } = github.context.payload;
 const { workflow, job, repo, runId, sha } = github.context;
 const PAGE_SIZE = 100;
 const octokit = new action_1.Octokit();
+function hidePreviousComments() {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!(pull_request === null || pull_request === void 0 ? void 0 : pull_request.number)) {
+            return;
+        }
+        try {
+            // Get all comments on the PR
+            const comments = yield octokit.rest.issues.listComments(Object.assign(Object.assign({}, github.context.repo), { issue_number: pull_request.number, per_page: 100 }));
+            // Find comments made by this action (identify by content markers)
+            const actionComments = comments.data.filter(comment => {
+                const body = comment.body || '';
+                return body.includes('### 🔍 Workflow Trace') &&
+                    body.includes('📊 Open Trace in Honeycomb') &&
+                    body.includes('## Workflow Step Trace -');
+            });
+            // Hide each previous comment using GraphQL API
+            for (const comment of actionComments) {
+                try {
+                    yield octokit.graphql(`
+          mutation($commentId: ID!) {
+            minimizeComment(input: {
+              subjectId: $commentId,
+              classifier: OUTDATED
+            }) {
+              minimizedComment {
+                isMinimized
+              }
+            }
+          }
+        `, {
+                        commentId: comment.node_id
+                    });
+                    logger.debug(`Hidden previous comment: ${comment.id}`);
+                }
+                catch (error) {
+                    logger.debug(`Failed to hide comment ${comment.id}: ${error}`);
+                }
+            }
+        }
+        catch (error) {
+            logger.debug(`Failed to hide previous comments: ${error}`);
+        }
+    });
+}
 function generateTraceContent(currentJob, traceUrl) {
     var _a;
     const stepCount = ((_a = currentJob.steps) === null || _a === void 0 ? void 0 : _a.length) || 0;
@@ -40573,21 +40613,6 @@ function generateTraceContent(currentJob, traceUrl) {
         `This trace includes detailed timing and context for all ${stepCount} workflow steps.`
     ];
     return content.join('\n');
-}
-function buildTraceId() {
-    const traceComponents = [
-        util.getEnv('GITHUB_REPOSITORY'),
-        util.getEnv('GITHUB_WORKFLOW'),
-        util.getEnv('GITHUB_RUN_NUMBER'),
-        util.getEnv('GITHUB_RUN_ATTEMPT')
-    ];
-    const rawTraceId = util.replaceSpaces(traceComponents.filter(value => value).join('-'));
-    const otelTraceIdFlag = core.getInput('otel-traceid').toLowerCase() === 'true';
-    if (otelTraceIdFlag) {
-        // md5 returns a 32-char hex string (128 bits)
-        return (0, md5_1.default)(rawTraceId);
-    }
-    return rawTraceId;
 }
 function getCurrentJob() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -40660,6 +40685,8 @@ function reportAll(currentJob, content) {
             if (logger.isDebugEnabled()) {
                 logger.debug(`Found Pull Request: ${JSON.stringify(pull_request)}`);
             }
+            // Hide previous comments from this action before creating a new one
+            yield hidePreviousComments();
             yield octokit.rest.issues.createComment(Object.assign(Object.assign({}, github.context.repo), { issue_number: Number((_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.number), body: postContent }));
         }
         else {
@@ -40672,7 +40699,7 @@ function runPost(currentJob) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const postStart = util.getTimestamp();
-            const traceId = buildTraceId();
+            const traceId = util.buildTraceId();
             // use trace-start if it's provided otherwise use the start time for current job
             const traceStart = core.getState('buildStart');
             const workflowStatus = process.env.GITHUB_ACTION_WORKFLOW_STATUS || 'success';
@@ -40791,22 +40818,6 @@ const buildevents = __importStar(__nccwpck_require__(1814));
 const util = __importStar(__nccwpck_require__(4527));
 const logger = __importStar(__nccwpck_require__(6999));
 const md5_1 = __importDefault(__nccwpck_require__(2296));
-function buildTraceId() {
-    var _a;
-    const traceComponents = [
-        util.getEnv('GITHUB_REPOSITORY'),
-        util.getEnv('GITHUB_WORKFLOW'),
-        util.getEnv('GITHUB_RUN_NUMBER'),
-        util.getEnv('GITHUB_RUN_ATTEMPT')
-    ];
-    const rawTraceId = util.replaceSpaces(traceComponents.filter(value => value).join('-'));
-    const otelTraceIdFlag = ((_a = process.env.GITHUB_ACTION_INPUT_OTEL_TRACEID) === null || _a === void 0 ? void 0 : _a.toLowerCase()) === 'true';
-    if (otelTraceIdFlag) {
-        // md5 returns a 32-char hex string (128 bits)
-        return (0, md5_1.default)(rawTraceId);
-    }
-    return rawTraceId;
-}
 ///////////////////////////
 function start() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -40827,7 +40838,7 @@ function finish(currentJob) {
         var _a;
         logger.info(`Finishing step tracer ...`);
         try {
-            const traceId = buildTraceId();
+            const traceId = util.buildTraceId();
             // Send step traces to Honeycomb using buildevents
             for (const step of currentJob.steps || []) {
                 if (!step.started_at || !step.completed_at) {
@@ -40896,15 +40907,20 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getTimestamp = getTimestamp;
 exports.randomInt = randomInt;
 exports.getEnv = getEnv;
 exports.setEnv = setEnv;
 exports.replaceSpaces = replaceSpaces;
+exports.buildTraceId = buildTraceId;
 exports.constructExecutableName = constructExecutableName;
 const core = __importStar(__nccwpck_require__(7484));
 const os = __importStar(__nccwpck_require__(857));
+const md5_1 = __importDefault(__nccwpck_require__(2296));
 function getTimestamp() {
     return Math.floor(Date.now() / 1000);
 }
@@ -40919,6 +40935,21 @@ function setEnv(key, value) {
 }
 function replaceSpaces(input) {
     return input.replace(/\s+/g, '_');
+}
+function buildTraceId() {
+    const traceComponents = [
+        getEnv('GITHUB_REPOSITORY'),
+        getEnv('GITHUB_WORKFLOW'),
+        getEnv('GITHUB_RUN_NUMBER'),
+        getEnv('GITHUB_RUN_ATTEMPT')
+    ];
+    const rawTraceId = replaceSpaces(traceComponents.filter(value => value).join('-'));
+    const otelTraceIdFlag = core.getInput('otel-traceid').toLowerCase() === 'true';
+    if (otelTraceIdFlag) {
+        // md5 returns a 32-char hex string (128 bits)
+        return (0, md5_1.default)(rawTraceId);
+    }
+    return rawTraceId;
 }
 function constructExecutableName() {
     const platform = os.platform();

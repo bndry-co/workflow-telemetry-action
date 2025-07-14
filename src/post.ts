@@ -12,6 +12,56 @@ const { workflow, job, repo, runId, sha } = github.context
 const PAGE_SIZE = 100
 const octokit: Octokit = new Octokit()
 
+async function hidePreviousComments(excludeCommentId?: number): Promise<void> {
+  if (!pull_request?.number) {
+    return
+  }
+
+  try {
+    // Get all comments on the PR
+    const comments = await octokit.rest.issues.listComments({
+      ...github.context.repo,
+      issue_number: pull_request.number,
+      per_page: 100
+    })
+
+    // Find comments made by this action (identify by content markers), excluding the new comment
+    const actionComments = comments.data.filter(comment => {
+      const body = comment.body || ''
+      return comment.id !== excludeCommentId &&
+             body.includes('### 🔍 Workflow Trace') && 
+             body.includes('📊 Open Trace in Honeycomb') &&
+             body.includes('## Workflow Step Trace -')
+    })
+
+    // Hide each previous comment using GraphQL API
+    for (const comment of actionComments) {
+      try {
+        await octokit.graphql(`
+          mutation($commentId: ID!) {
+            minimizeComment(input: {
+              subjectId: $commentId,
+              classifier: OUTDATED
+            }) {
+              minimizedComment {
+                isMinimized
+              }
+            }
+          }
+        `, {
+          commentId: comment.node_id
+        })
+        
+        logger.debug(`Hidden previous comment: ${comment.id}`)
+      } catch (error) {
+        logger.debug(`Failed to hide comment ${comment.id}: ${error}`)
+      }
+    }
+  } catch (error) {
+    logger.debug(`Failed to hide previous comments: ${error}`)
+  }
+}
+
 function generateTraceContent(
   currentJob: WorkflowJobType,
   traceUrl: string
@@ -134,11 +184,14 @@ async function reportAll(
       logger.debug(`Found Pull Request: ${JSON.stringify(pull_request)}`)
     }
 
-    await octokit.rest.issues.createComment({
+    const newComment = await octokit.rest.issues.createComment({
       ...github.context.repo,
       issue_number: Number(github.context.payload.pull_request?.number),
       body: postContent
     })
+
+    // Hide previous comments from this action after creating the new one
+    await hidePreviousComments(newComment.data.id)
   } else {
     logger.debug(`Couldn't find Pull Request`)
   }
