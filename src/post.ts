@@ -12,6 +12,72 @@ const { workflow, job, repo, runId, sha } = github.context
 const PAGE_SIZE = 100
 const octokit: Octokit = new Octokit()
 
+async function hidePreviousComments(): Promise<void> {
+  if (!pull_request?.number) {
+    return
+  }
+
+  try {
+    // Get all comments on the PR
+    const comments = await octokit.rest.issues.listComments({
+      ...github.context.repo,
+      issue_number: pull_request.number,
+      per_page: 100
+    })
+
+    // Get current commit SHA
+    const currentCommit = (pull_request && pull_request.head && pull_request.head.sha) || sha
+
+    // Find comments made by this action for older commits, excluding the new comment
+    const commentsToHide = comments.data.filter(comment => {
+      const body = comment.body || ''
+      
+      // Check if it's a comment from this action
+      const isCommentFromThisAction = body.includes('## Workflow Step Trace -')
+      
+      if (!isCommentFromThisAction) {
+        return false
+      }
+      
+      // Extract commit SHA from comment body
+      const commitRegexMatch = body.match(/commit\/([a-f0-9]{40})/i)
+      if (commitRegexMatch) {
+        const commentCommit = commitRegexMatch[1]
+        // Only hide if it's for a different (older) commit
+        return commentCommit !== currentCommit
+      }
+      
+      return false
+    })
+
+    // Hide each previous comment using GraphQL API
+    for (const comment of commentsToHide) {
+      try {
+        await octokit.graphql(`
+          mutation($commentId: ID!) {
+            minimizeComment(input: {
+              subjectId: $commentId,
+              classifier: OUTDATED
+            }) {
+              minimizedComment {
+                isMinimized
+              }
+            }
+          }
+        `, {
+          commentId: comment.node_id
+        })
+        
+        logger.debug(`Hidden comment from older commit: ${comment.id}`)
+      } catch (error) {
+        logger.debug(`Failed to hide comment ${comment.id}: ${error}`)
+      }
+    }
+  } catch (error) {
+    logger.debug(`Failed to hide previous comments: ${error}`)
+  }
+}
+
 function generateTraceContent(
   currentJob: WorkflowJobType,
   traceUrl: string
@@ -134,11 +200,14 @@ async function reportAll(
       logger.debug(`Found Pull Request: ${JSON.stringify(pull_request)}`)
     }
 
-    await octokit.rest.issues.createComment({
+    const newComment = await octokit.rest.issues.createComment({
       ...github.context.repo,
       issue_number: Number(github.context.payload.pull_request?.number),
       body: postContent
     })
+
+    // Hide previous comments from this action after creating the new one
+    await hidePreviousComments()
   } else {
     logger.debug(`Couldn't find Pull Request`)
   }
