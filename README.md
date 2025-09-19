@@ -1,3 +1,11 @@
+## ⚠️ REPOSITORY ARCHIVED ⚠️
+
+**This repository has been archived and is no longer maintained. We have moved to [Blacksmith](https://www.blacksmith.sh/) for CI/CD observability and performance optimization.**
+
+**Please visit [https://www.blacksmith.sh/](https://www.blacksmith.sh/) for the latest tools and solutions.**
+
+---
+
 # Workflow Step Telemetry Action
 
 A GitHub Action that instruments GitHub Actions workflow steps and sends distributed traces to Honeycomb for CI/CD observability. This action tracks step performance, timing, and status.
